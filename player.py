@@ -24,6 +24,8 @@ STATE_TABLE = {
 # TODO Error 简化写法
 # TODO 管理playlist和current_idx状态
 # TODO 把各类注释、提示信息换回中文。。
+# TODO 尝试将StatusConverter封装到Player内部
+
 
 class PlayerError(Exception):
     pass
@@ -49,7 +51,7 @@ class StatusConverter:
         if trigger is None and status is None:
             raise StatusError('trigger, status至少需要传入一个')
         self.player = player
-        self.player_status = player.status
+        self.original_status = player.status
         self.trigger = trigger
         self.status = status
 
@@ -65,12 +67,12 @@ class StatusConverter:
         if new_status is not None:
             self.player.status = new_status
             return True
-        print(f'无效操作，当前状态："{self.player_status}，"，尝试操作："{self.trigger}"')
+        print(f'无效操作，当前状态："{self.original_status}，"，尝试操作："{self.trigger}"')
         return False
 
     def __exit__(self, type, value, traceback):
         if type is not None:
-            self.player.status = self.player_status
+            self.player.status = self.original_status
 
 
 class Player:
@@ -86,6 +88,7 @@ class Player:
         self._status = 'stop'
         self._current_idx = None
         self.lock = Lock()
+        self.stop_lock = Lock()
 
     @property
     def status(self):
@@ -122,7 +125,7 @@ class Player:
             mixer.music.play()
 
     def stop(self):
-        with StatusConverter(self, 'stop') as succeed:
+        with self.stop_lock, StatusConverter(self, 'stop') as succeed:
             if not succeed:
                 return
             mixer.music.stop()
@@ -192,7 +195,7 @@ class Player:
             self._current_idx = 0
 
     def switch_status(self, trigger:str=None, status:str=None):
-        # deprecated
+        # 该方法暂时废弃了
         if trigger is None and status is None:
             raise ValueError('Need at least 1 argument.')
         if status is not None:
@@ -213,7 +216,14 @@ class Player:
 
     def song_end_handler(self):
 
-        while self._status != 'stop':
+        # 处理一种很极端的情况
+        # 原先如果调用stop时出错，状态回滚，而这边刚好判断到状态为stop
+        # 线程就会停掉，所以加了个锁，我也不确定有没有必要这么做。。
+
+        while True:
+            with self.stop_lock:
+                if self._status != 'stop':
+                    break
             events = pygame.event.get()
             for event in events:
                 if event.type == SONG_END and self._status != 'stop':
