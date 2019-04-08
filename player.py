@@ -13,13 +13,8 @@ pygame.init()
 SONG_END = pygame.USEREVENT + 1
 mixer.music.set_endevent(SONG_END)
 
-# TODO playlist 内部换用 Song 对象
-# TODO status/playlist/current_idx getter, setter
-# TODO Error 简化写法
 # TODO 管理playlist和current_idx状态
-# TODO 把各类注释、提示信息换回中文。。
-# TODO 尝试将StatusConverter封装到Player内部    √
-
+# TODO Error 简化写法
 
 class PlayerError(Exception):
     pass
@@ -27,13 +22,16 @@ class PlayerError(Exception):
 class StatusError(PlayerError):
     pass
 
+class SongTypeError(PlayerError):
+    pass
 
 class Song:
 
-    def __init__(self, path, name, file_name=None, artist=None):
-        self.path, self.name = path, name
-        self.file_name = file_name or os.path.split(path)[1]
+    def __init__(self, path, name=None, artist=None, file_name=None):
+        self.path = path
+        self.name = name or os.path.splitext(os.path.split(path)[1])[0]
         self.artist = artist or 'Unknown'
+        self.file_name = file_name or os.path.split(path)[1]
 
     def __repr__(self):
         return f'{self.name} - {self.artist}'
@@ -85,7 +83,7 @@ class Player:
                 self._song_end_handler.start()
 
             song = self._playlist[self._current_idx]
-            mixer.music.load(song)
+            mixer.music.load(song.path)
             mixer.music.play()
 
     def stop(self):
@@ -112,7 +110,7 @@ class Player:
             if not succeed:
                 return
             song = self._playlist[index]
-            mixer.music.load(song)
+            mixer.music.load(song.path)
             mixer.music.play()
             self._current_idx = index
 
@@ -136,8 +134,8 @@ class Player:
 
     def append_new_song(self, song:Song, index=None):
 
-        # if not isinstance(song, Song):
-        #     raise TypeError('Song instance needed.')
+        if not isinstance(song, Song):
+            raise TypeError('Song instance needed.')
         if index is None:
             self._playlist.append(song)
         else:
@@ -153,7 +151,7 @@ class Player:
         files = map(partial(os.path.join, path), os.listdir(path))
         files = [file for file in files \
             if os.path.isfile(file) and os.path.splitext(file)[1]=='.mp3']
-        self._playlist.extend(files)
+        self._playlist.extend(Song(file) for file in files)
 
         if self._current_idx is None:
             self._current_idx = 0
@@ -171,31 +169,28 @@ class Player:
                 raise StatusError('No such status')
             self._status = status
             succeed_switching = True
-
-        table = self.state_table.get(self._status)
-        if table is None:
-            raise StatusError(f'播放器状态异常：{self._status}')
-        new_status = table.get(trigger)
-        if new_status is None:
-            print(f'无效操作，当前状态：{self._status}，尝试操作：{trigger}')
         else:
-            self._status = new_status
-            succeed_switching = True
+            table = self.state_table.get(self._status)
+            if table is None:
+                raise StatusError(f'播放器状态异常：{self._status}')
+            new_status = table.get(trigger)
+            if new_status is None:
+                print(f'无效操作，当前状态：{self._status}，尝试操作：{trigger}')
+            else:
+                self._status = new_status
+                succeed_switching = True
         try:
             yield succeed_switching
         except Exception as e:
-            print(e)
             self._status = original_status
+            raise e
 
     def song_end_handler(self):
 
-        # 处理一种很极端的情况
-        # 原先如果调用stop时出错，状态回滚，而这边刚好判断到状态为stop
-        # 线程就会停掉，所以加了个锁，我也不确定有没有必要这么做。。
-
         while True:
             with self.stop_lock:
-                if self._status != 'stop':
+                if self._status == 'stop':
+                    pygame.event.clear(eventtype=SONG_END)
                     break
             events = pygame.event.get()
             for event in events:
