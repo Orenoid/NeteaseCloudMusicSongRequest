@@ -1,10 +1,11 @@
 import os
-from functools import partial
-
-from pygame import mixer
-from threading import Thread, Lock
 import time
+from contextlib import contextmanager
+from functools import partial
+from threading import Lock, Thread
+
 import pygame
+from pygame import mixer
 
 mixer.init()
 pygame.init()
@@ -12,19 +13,12 @@ pygame.init()
 SONG_END = pygame.USEREVENT + 1
 mixer.music.set_endevent(SONG_END)
 
-STATE_TABLE = {
-    'stop': {'play': 'playing', 'stop': 'stop'},
-    'playing': {'pause': 'pause', 'stop': 'stop'},
-    'pause': {'unpause': 'playing', 'stop': 'stop'}
-}
-
-
 # TODO playlist 内部换用 Song 对象
 # TODO status/playlist/current_idx getter, setter
 # TODO Error 简化写法
 # TODO 管理playlist和current_idx状态
 # TODO 把各类注释、提示信息换回中文。。
-# TODO 尝试将StatusConverter封装到Player内部
+# TODO 尝试将StatusConverter封装到Player内部    √
 
 
 class PlayerError(Exception):
@@ -45,37 +39,14 @@ class Song:
         return f'{self.name} - {self.artist}'
 
 
-class StatusConverter:
-
-    def __init__(self, player, trigger=None, status=None):
-        if trigger is None and status is None:
-            raise StatusError('trigger, status至少需要传入一个')
-        self.player = player
-        self.original_status = player.status
-        self.trigger = trigger
-        self.status = status
-
-    def __enter__(self):
-        if self.status is not None:
-            self.player.status = self.status
-            return True
-
-        table = STATE_TABLE.get(self.player.status)
-        if table is None:
-            raise StatusError(f'播放器状态已脱离正常范围："{self.player.status}"')
-        new_status = table.get(self.trigger)
-        if new_status is not None:
-            self.player.status = new_status
-            return True
-        print(f'无效操作，当前状态："{self.original_status}，"，尝试操作："{self.trigger}"')
-        return False
-
-    def __exit__(self, type, value, traceback):
-        if type is not None:
-            self.player.status = self.original_status
-
-
 class Player:
+
+    state_table = {
+        'stop': {'play': 'playing', 'stop': 'stop'},
+        'playing': {'pause': 'pause', 'stop': 'stop'},
+        'pause': {'unpause': 'playing', 'stop': 'stop'}
+    }
+
 
     def __new__(cls):
         if not hasattr(cls, '_instance'):
@@ -87,18 +58,13 @@ class Player:
         self._playlist = []
         self._status = 'stop'
         self._current_idx = None
+
         self.lock = Lock()
         self.stop_lock = Lock()
 
     @property
     def status(self):
         return self._status
-
-    @status.setter
-    def status(self, status):
-        if status not in STATE_TABLE.keys():
-            raise StatusError(f'状态"{status}"不存在')
-        self._status = status
 
     @property
     def playlist(self):
@@ -108,11 +74,9 @@ class Player:
     def current_idx(self):
         return self._current_idx
 
-
     def play(self, index=None):
 
-        with StatusConverter(self, 'play') as succeed:
-
+        with self.switch_status('play') as succeed:
             if not succeed:
                 return
             if not hasattr(self, '_song_end_handler'):
@@ -125,14 +89,14 @@ class Player:
             mixer.music.play()
 
     def stop(self):
-        with self.stop_lock, StatusConverter(self, 'stop') as succeed:
+        with self.stop_lock, self.switch_status('stop') as succeed:
             if not succeed:
                 return
             mixer.music.stop()
             if hasattr(self, '_song_end_handler'):
                 del self._song_end_handler
 
-    def next_song(self): 
+    def next_song(self):
         new_index = self._current_idx + 1 \
             if self._current_idx < len(self._playlist) - 1 else 0
         self.switch_song(new_index)
@@ -144,7 +108,7 @@ class Player:
 
     def switch_song(self, index:int):
         # Whatever the current status is, set it to "playing".
-        with StatusConverter(self, status='playing') as succeed:
+        with self.switch_status(status='playing') as succeed:
             if not succeed:
                 return
             song = self._playlist[index]
@@ -153,7 +117,7 @@ class Player:
             self._current_idx = index
 
     def pause(self):
-        with StatusConverter(self, 'pause') as succeed:
+        with self.switch_status('pause') as succeed:
             if not succeed:
                 return
             if not mixer.music.get_busy():
@@ -162,7 +126,7 @@ class Player:
             mixer.music.pause()
 
     def unpause(self):
-        with StatusConverter(self, 'unpause') as succeed:
+        with self.switch_status('unpause') as succeed:
             if not succeed:
                 return
             if not mixer.music.get_busy():
@@ -194,25 +158,34 @@ class Player:
         if self._current_idx is None:
             self._current_idx = 0
 
-    def switch_status(self, trigger:str=None, status:str=None):
-        # 该方法暂时废弃了
+    @contextmanager
+    def switch_status(self, trigger=None, status=None):
+
+        original_status = self._status
+        succeed_switching = False
+
         if trigger is None and status is None:
-            raise ValueError('Need at least 1 argument.')
+            raise StatusError('trigger, status至少需要传入一个')
         if status is not None:
-            if status not in STATE_TABLE.keys():
-                raise StatusError('No such status in state machine.')
+            if status not in self.state_table.keys():
+                raise StatusError('No such status')
             self._status = status
-            return True
+            succeed_switching = True
 
-        table = STATE_TABLE.get(self._status)
+        table = self.state_table.get(self._status)
         if table is None:
-            raise StatusError(f'Status "{self._status}" is out of control.')
+            raise StatusError(f'播放器状态异常：{self._status}')
         new_status = table.get(trigger)
-        if new_status is not None:
+        if new_status is None:
+            print(f'无效操作，当前状态：{self._status}，尝试操作：{trigger}')
+        else:
             self._status = new_status
-            return True
-
-        print(f'Tried trigger "{trigger}" while player status is "{self._status}"')
+            succeed_switching = True
+        try:
+            yield succeed_switching
+        except Exception as e:
+            print(e)
+            self._status = original_status
 
     def song_end_handler(self):
 
