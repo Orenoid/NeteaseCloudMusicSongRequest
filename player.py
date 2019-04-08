@@ -12,6 +12,12 @@ pygame.init()
 SONG_END = pygame.USEREVENT + 1
 mixer.music.set_endevent(SONG_END)
 
+STATE_TABLE = {
+    'stop': {'play': 'playing', 'stop': 'stop'},
+    'playing': {'pause': 'pause', 'stop': 'stop'},
+    'pause': {'unpause': 'playing', 'stop': 'stop'}
+}
+
 
 # TODO playlist 内部换用 Song 对象
 # TODO status/playlist/current_idx getter, setter
@@ -21,7 +27,6 @@ mixer.music.set_endevent(SONG_END)
 
 class PlayerError(Exception):
     pass
-
 
 class StatusError(PlayerError):
     pass
@@ -37,15 +42,40 @@ class Song:
     def __repr__(self):
         return f'{self.name} - {self.artist}'
 
+
+class StatusConverter:
+
+    def __init__(self, player, trigger=None, status=None):
+        if trigger is None and status is None:
+            raise StatusError('trigger, status至少需要传入一个')
+        self.player = player
+        self.player_status = player.status
+        self.trigger = trigger
+        self.status = status
+
+    def __enter__(self):
+        if self.status is not None:
+            self.player.status = self.status
+            return True
+
+        table = STATE_TABLE.get(self.player.status)
+        if table is None:
+            raise StatusError(f'播放器状态已脱离正常范围："{self.player.status}"')
+        new_status = table.get(self.trigger)
+        if new_status is not None:
+            self.player.status = new_status
+            return True
+        print(f'无效操作，当前状态："{self.player_status}，"，尝试操作："{self.trigger}"')
+        return False
+
+    def __exit__(self, type, value, traceback):
+        if type is not None:
+            self.player.status = self.player_status
+
+
 class Player:
 
-    state_table = {
-        'stop': {'play': 'playing', 'stop': 'stop'},
-        'playing': {'pause': 'pause', 'stop': 'stop'},
-        'pause': {'unpause': 'playing', 'stop': 'stop'}
-    }
-
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls):
         if not hasattr(cls, '_instance'):
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -57,19 +87,19 @@ class Player:
         self._current_idx = None
         self.lock = Lock()
 
-        # TODO
-        # append songs that have been required before the program start, 
-        # from local files, redis or anywhere else.
-
     @property
     def status(self):
         return self._status
 
+    @status.setter
+    def status(self, status):
+        if status not in STATE_TABLE.keys():
+            raise StatusError(f'状态"{status}"不存在')
+        self._status = status
 
     @property
     def playlist(self):
         return self._playlist
-
 
     @property
     def current_idx(self):
@@ -78,13 +108,10 @@ class Player:
 
     def play(self, index=None):
 
-        if self._current_idx is None \
-            or len(self._playlist) == 0:
-            # Do something
-            return
+        with StatusConverter(self, 'play') as succeed:
 
-        if self.switch_status('play'):
-
+            if not succeed:
+                return
             if not hasattr(self, '_song_end_handler'):
                 # TODO daemon
                 self._song_end_handler = Thread(target=self.song_end_handler)
@@ -95,46 +122,46 @@ class Player:
             mixer.music.play()
 
     def stop(self):
-        if self.switch_status('stop'):
+        with StatusConverter(self, 'stop') as succeed:
+            if not succeed:
+                return
             mixer.music.stop()
-        if hasattr(self, '_song_end_handler'):
-            del self._song_end_handler
+            if hasattr(self, '_song_end_handler'):
+                del self._song_end_handler
 
     def next_song(self): 
-        if self._current_idx is None \
-            or len(self._playlist) == 0:
-            # Do something
-            return
         new_index = self._current_idx + 1 \
             if self._current_idx < len(self._playlist) - 1 else 0
         self.switch_song(new_index)
 
     def previous_song(self):
-        if self._current_idx is None \
-            or len(self._playlist) == 0:
-            # Do something
-            return
         new_index = self._current_idx - 1 \
             if self._current_idx > 0 else 0
         self.switch_song(new_index)
 
     def switch_song(self, index:int):
         # Whatever the current status is, set it to "playing".
-        song = self._playlist[index]
-        mixer.music.load(song)
-        mixer.music.play()
-        self._current_idx = index
-        self.switch_status(status='playing')
+        with StatusConverter(self, status='playing') as succeed:
+            if not succeed:
+                return
+            song = self._playlist[index]
+            mixer.music.load(song)
+            mixer.music.play()
+            self._current_idx = index
 
     def pause(self):
-        if self.switch_status('pause'):
+        with StatusConverter(self, 'pause') as succeed:
+            if not succeed:
+                return
             if not mixer.music.get_busy():
                 raise StatusError(f'mixer.music is not busy \
                     while player status is {self._status}.')
             mixer.music.pause()
 
     def unpause(self):
-        if self.switch_status('unpause'):
+        with StatusConverter(self, 'unpause') as succeed:
+            if not succeed:
+                return
             if not mixer.music.get_busy():
                 raise StatusError(f'mixer.music is not busy \
                     while player status is {self._status}.')
@@ -165,16 +192,16 @@ class Player:
             self._current_idx = 0
 
     def switch_status(self, trigger:str=None, status:str=None):
-
+        # deprecated
         if trigger is None and status is None:
             raise ValueError('Need at least 1 argument.')
         if status is not None:
-            if status not in self.state_table.keys():
+            if status not in STATE_TABLE.keys():
                 raise StatusError('No such status in state machine.')
             self._status = status
             return True
 
-        table = self.state_table.get(self._status)
+        table = STATE_TABLE.get(self._status)
         if table is None:
             raise StatusError(f'Status "{self._status}" is out of control.')
         new_status = table.get(trigger)
