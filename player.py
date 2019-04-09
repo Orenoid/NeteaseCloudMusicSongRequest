@@ -3,7 +3,7 @@ import time
 from contextlib import contextmanager
 from functools import partial
 from threading import Lock, Thread
-
+import socket
 import pygame
 from pygame import mixer
 
@@ -46,19 +46,25 @@ class Player:
     }
 
 
-    def __new__(cls):
-        if not hasattr(cls, '_instance'):
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    # def __new__(cls):
+    #     if not hasattr(cls, '_instance'):
+    #         cls._instance = super().__new__(cls)
+    #     return cls._instance
 
-    def __init__(self):
+    def __init__(self, listen=False, host='127.0.0.1', port=9012):
 
         self._playlist = []
         self._status = 'stop'
         self._current_idx = None
 
+        self.thread_pool = []
         self.lock = Lock()
         self.stop_lock = Lock()
+
+        if listen:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.bind((host, port))
+            self.listen(host, port)
 
     @property
     def status(self):
@@ -198,3 +204,17 @@ class Player:
                     with self.lock:
                         self.next_song()
             time.sleep(0.2)
+
+    def socket_handler(self):
+        while True:
+            conn, addr = self.socket.accept()
+            data = conn.recv(1024).decode()
+            if data == 'play':
+                with self.lock:
+                    self.play()
+                conn.send(b'playing')
+
+    def listen(self, host, port):
+        self.socket.listen(5)
+        self._socket_handler = Thread(target=self.socket_handler)
+        self._socket_handler.start()
