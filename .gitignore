@@ -126,3 +126,4 @@ dmypy.json
 # my
 music/
 .vscode/
+config.py
