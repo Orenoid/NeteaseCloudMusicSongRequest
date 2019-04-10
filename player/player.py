@@ -57,13 +57,11 @@ class Player:
         self._status = 'stop'
         self._current_idx = None
 
-        self.thread_pool = []
         self.lock = Lock()
         self.stop_lock = Lock()
 
         if listen:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.bind((host, port))
             self.listen(host, port)
 
     @property
@@ -78,7 +76,7 @@ class Player:
     def current_idx(self):
         return self._current_idx
 
-    def play(self, index=None):
+    def play(self):
 
         with self.switch_status('play') as succeed:
             if not succeed:
@@ -138,10 +136,14 @@ class Player:
                     while player status is {self._status}.')
             mixer.music.unpause()
 
-    def append_new_song(self, song:Song, index=None):
+    def append_new_song(self, song:Song=None, path:str=None, index=None):
 
-        if not isinstance(song, Song):
-            raise TypeError('Song instance needed.')
+        assert song is not None or path is not None, 'song, path至少传入一个'
+        if song is None:
+            song = Song(path)
+        elif not isinstance(song, Song):
+            raise SongTypeError('播放列表只接收Song对象')
+
         if index is None:
             self._playlist.append(song)
         else:
@@ -207,7 +209,7 @@ class Player:
 
     def socket_handler(self):
         while True:
-            conn, addr = self.socket.accept()
+            conn, _ = self.socket.accept()
             data = conn.recv(1024).decode()
             if data == 'play':
                 with self.lock:
@@ -215,6 +217,7 @@ class Player:
                 conn.send(b'playing')
 
     def listen(self, host, port):
+        self.socket.bind((host, port))
         self.socket.listen(5)
         self._socket_handler = Thread(target=self.socket_handler)
         self._socket_handler.start()
