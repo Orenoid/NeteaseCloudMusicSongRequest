@@ -46,10 +46,10 @@ class Player:
     }
 
 
-    # def __new__(cls):
-    #     if not hasattr(cls, '_instance'):
-    #         cls._instance = super().__new__(cls)
-    #     return cls._instance
+    def __new__(cls, *args, **kwargs):
+        if not hasattr(cls, '_instance'):
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
     def __init__(self, listen=False, host='127.0.0.1', port=9012):
 
@@ -82,8 +82,7 @@ class Player:
             if not succeed:
                 return
             if not hasattr(self, '_song_end_handler'):
-                # TODO daemon
-                self._song_end_handler = Thread(target=self.song_end_handler)
+                self._song_end_handler = Thread(target=self.song_end_handler, daemon=True)
                 self._song_end_handler.start()
 
             song = self._playlist[self._current_idx]
@@ -219,5 +218,5 @@ class Player:
     def listen(self, host, port):
         self.socket.bind((host, port))
         self.socket.listen(5)
-        self._socket_handler = Thread(target=self.socket_handler)
+        self._socket_handler = Thread(target=self.socket_handler, daemon=True)
         self._socket_handler.start()
