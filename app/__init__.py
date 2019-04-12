@@ -3,9 +3,11 @@ from flask import Flask
 from flask.logging import default_handler
 
 import multilog
-from .blueprint import api_bp
 from config import AppConfig
 
+from celery import Celery
+
+celery = Celery(__name__, broker=AppConfig.CELERY_BROKER_URL)
 
 def create_app():
 
@@ -25,6 +27,9 @@ def create_app():
     app.logger.addHandler(ch)
     app.logger.setLevel(logging.INFO)
 
+    celery.conf.update(app.config)
+
+    from .blueprint import api_bp
     app.register_blueprint(api_bp, url_prefix='/api/v0')
 
     return app

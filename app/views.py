@@ -1,11 +1,16 @@
+import os
+import socket
+import time
+
 import requests
 from flask import current_app as app
 
+from . import create_app, celery
 
 def search_songs(**args):
 
-    url = app.config['CLOUD_MUSIC_API_HOST'] + '/search'
-    resp = requests.get(url, params=args)
+    search_url = app.config['CLOUD_MUSIC_API_HOST'] + '/search'
+    resp = requests.get(search_url, params=args)
 
     if resp.status_code != 200:
         app.logger.error(resp.text)
@@ -19,13 +24,24 @@ def search_songs(**args):
         'song_count': song_count
     }
 
+def append_song(song:dict, keywords=None):
 
-def append_song(song_id=None, keywords=None):
-    pass
+    query_url = app.config['CLOUD_MUSIC_API_HOST'] + '/song/url'
+    resp = requests.get(query_url, {'id': song['id']})
+    song_url = resp.json()['data'][0]['url']
+    download_song.delay(song_url, song['name'], song['artist'])
 
-def get_playlist():
-    pass
+    return {'result': 'success'}
 
+
+@celery.task
+def download_song(url, name, artist):
+
+    app = create_app()
+    with app.app_context():
+        resp = requests.get(url)
+        with open(os.path.join(app.config['MUSIC_PATH'], f'{name}.mp3')) as file:
+            file.write(resp.content)
 
 
 def song_serializer(song:dict):
