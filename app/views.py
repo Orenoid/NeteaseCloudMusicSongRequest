@@ -5,7 +5,7 @@ import time
 import requests
 from flask import current_app as app
 
-from . import create_app, celery
+from . import celery
 
 def search_songs(**args):
 
@@ -37,10 +37,10 @@ def append_song(song:dict, keywords=None):
 @celery.task
 def download_song(url, name, artist):
 
-    app = create_app()
+    from celery_worker import app
     with app.app_context():
         resp = requests.get(url)
-        with open(os.path.join(app.config['MUSIC_PATH'], f'{name}.mp3')) as file:
+        with open(os.path.join(app.config['MUSIC_PATH'], f'{name}.mp3'), 'wb') as file:
             file.write(resp.content)
 
 

@@ -1,4 +1,3 @@
-from app import celery
+from app import celery, create_app
 
-# app = create_app()
-# app.app_context().push()
+_, app = create_app()
